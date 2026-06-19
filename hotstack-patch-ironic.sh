@@ -259,6 +259,9 @@ echo "==> Image tag: $IMAGE_TAG"
 EXTERNAL_IMG="$REGISTRY/$NAMESPACE/ironic-operator:$IMAGE_TAG"
 INTERNAL_IMG="image-registry.openshift-image-registry.svc:5000/$NAMESPACE/ironic-operator:$IMAGE_TAG"
 
+echo "==> Cleaning up old images to free disk space..."
+podman image prune -af 2>/dev/null || true
+
 echo "==> Building image..."
 podman build -t "$EXTERNAL_IMG" .
 
