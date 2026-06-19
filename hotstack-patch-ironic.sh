@@ -19,7 +19,7 @@ REPO_URL="https://github.com/openstack-k8s-operators/ironic-operator.git"
 WORKSPACE_DIR="$HOME/workspace"
 REPO_DIR="$WORKSPACE_DIR/ironic-operator"
 NAMESPACE="openstack-operators"
-IMAGE_TAG="dev"
+IMAGE_TAG="dev"  # overridden below after checkout
 ENV_VAR="RELATED_IMAGE_IRONIC_OPERATOR_MANAGER_IMAGE_URL"
 TOKEN_FILE="$HOME/.dev-deploy-ironic-token"
 TOKEN_MAX_AGE=3000  # 50 minutes — safely under the 1h default token expiry
@@ -249,6 +249,10 @@ else
 fi
 
 echo "==> Building from: $(git log --oneline -1)"
+
+# Use the commit SHA as the image tag so it's always verifiable
+IMAGE_TAG=$(git rev-parse --short HEAD)
+echo "==> Image tag: $IMAGE_TAG"
 
 # ── 7. Build and push ────────────────────────────────────────────────────────
 
