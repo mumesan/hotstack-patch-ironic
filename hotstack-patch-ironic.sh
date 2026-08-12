@@ -268,6 +268,10 @@ podman build -t "$EXTERNAL_IMG" .
 echo "==> Pushing image..."
 podman push "$EXTERNAL_IMG" --tls-verify=false
 
+echo "==> Applying updated CRDs from checked-out branch..."
+oc apply -f config/crd/bases/
+echo "==> CRDs applied."
+
 # ── 8. Patch the openstack-operator CSV ──────────────────────────────────────
 #
 # The ironic-operator has no CSV of its own — it is managed by the
@@ -303,6 +307,11 @@ print(json.dumps(patches))
 
 oc patch csv/"$CSV_BARE" -n "$NAMESPACE" --type json -p "$PATCH"
 echo "==> CSV patched."
+
+echo "==> Restarting openstack-operator to pick up updated env var..."
+oc rollout restart deployment/openstack-operator-controller-manager -n "$NAMESPACE"
+oc rollout status deployment/openstack-operator-controller-manager -n "$NAMESPACE" --timeout=120s
+echo "==> openstack-operator ready."
 
 # ── 9. Wait for rollout and verify ───────────────────────────────────────────
 
