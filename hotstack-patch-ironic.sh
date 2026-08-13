@@ -97,6 +97,7 @@ print(json.dumps(patches))
 if [[ -n "$DIRECT_IMAGE" ]]; then
     echo "==> Using provided image (skipping build): $DIRECT_IMAGE"
     patch_csv_and_rollout "$DIRECT_IMAGE"
+    oc set image deployment/ironic-operator-controller-manager manager="$DIRECT_IMAGE" -n "$NAMESPACE"
     echo "==> Waiting for ironic-operator rollout..."
     oc rollout status deployment/ironic-operator-controller-manager -n "$NAMESPACE" --timeout=120s
     echo "==> Image in use:"
