@@ -93,30 +93,17 @@ print(json.dumps(patches))
     echo "==> openstack-operator ready."
 }
 
-verify_and_finish() {
-    echo "==> Waiting for rollout..."
-    oc rollout status deployment/ironic-operator-controller-manager \
-        -n "$NAMESPACE" \
-        --timeout=120s
-    NEW_POD=$(oc get pods -n "$NAMESPACE" \
-        -l control-plane=controller-manager \
-        --sort-by=.metadata.creationTimestamp \
-        -o jsonpath='{.items[-1].metadata.name}')
-    echo "==> New pod: $NEW_POD"
-    echo "==> Image in use:"
-    oc get pod "$NEW_POD" -n "$NAMESPACE" \
-        -o jsonpath='{.spec.containers[*].image}' && echo
-    echo "==> Startup logs:"
-    oc logs -n "$NAMESPACE" "$NEW_POD" -c manager | head -15
-    echo ""
-    echo "Done."
-}
-
 # ── Shortcut: --image skips build entirely ────────────────────────────────────
 if [[ -n "$DIRECT_IMAGE" ]]; then
     echo "==> Using provided image (skipping build): $DIRECT_IMAGE"
     patch_csv_and_rollout "$DIRECT_IMAGE"
-    verify_and_finish
+    echo "==> Waiting for ironic-operator rollout..."
+    oc rollout status deployment/ironic-operator-controller-manager -n "$NAMESPACE" --timeout=120s
+    echo "==> Image in use:"
+    oc get deployment ironic-operator-controller-manager -n "$NAMESPACE" \
+        -o jsonpath='{.spec.template.spec.containers[0].image}' && echo
+    echo ""
+    echo "Done."
     exit 0
 fi
 
@@ -347,11 +334,32 @@ echo "==> CRDs applied."
 
 patch_csv_and_rollout "$INTERNAL_IMG"
 
-# ── 9. Clean up local image and verify rollout ───────────────────────────────
+# ── 9. Wait for rollout and verify ───────────────────────────────────────────
+
+echo "==> Waiting for rollout..."
+oc rollout status deployment/ironic-operator-controller-manager \
+    -n "$NAMESPACE" \
+    --timeout=120s
+
+NEW_POD=$(oc get pods -n "$NAMESPACE" \
+    -l control-plane=controller-manager \
+    --sort-by=.metadata.creationTimestamp \
+    -o jsonpath='{.items[-1].metadata.name}')
+
+echo "==> New pod: $NEW_POD"
+echo "==> Image in use:"
+oc get pod "$NEW_POD" -n "$NAMESPACE" \
+    -o jsonpath='{.spec.containers[*].image}' && echo
+
+echo "==> Startup logs:"
+oc logs -n "$NAMESPACE" "$NEW_POD" -c manager | head -15
+
+# ── 10. Clean up local image ─────────────────────────────────────────────────
 # The image is now in the cluster registry; the local copy just wastes disk.
 
 echo "==> Removing local image..."
 podman rmi "$EXTERNAL_IMG" 2>/dev/null || true
 podman image prune -f 2>/dev/null || true
 
-verify_and_finish
+echo ""
+echo "Done."
