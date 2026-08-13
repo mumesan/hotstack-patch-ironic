@@ -10,10 +10,13 @@
 #   ./dev-deploy-ironic.sh --pr 722                               # PR by number
 #   ./dev-deploy-ironic.sh --branch osprh-27737                   # branch
 #   ./dev-deploy-ironic.sh --setup-only                           # registry setup only
+#   ./dev-deploy-ironic.sh --image quay.io/org/ironic-operator@sha256:abc123
+#                                                                  # skip build, patch CSV with existing image
 #
 # Prerequisites: podman, oc, git, python3 on the bastion.
 
 set -euo pipefail
+
 
 REPO_URL="https://github.com/openstack-k8s-operators/ironic-operator.git"
 WORKSPACE_DIR="$HOME/workspace"
@@ -30,6 +33,7 @@ BRANCH=""
 PR=""
 INTERACTIVE=false
 SETUP_ONLY=false
+DIRECT_IMAGE=""
 
 if [[ $# -eq 0 ]]; then
     INTERACTIVE=true
@@ -42,15 +46,61 @@ else
                 PR="$2"; shift 2 ;;
             --setup-only)
                 SETUP_ONLY=true; shift ;;
+            --image)
+                DIRECT_IMAGE="$2"; shift 2 ;;
             https://github.com/*/pull/*)
                 PR=$(basename "$1"); shift ;;
             *)
                 echo "ERROR: Unknown argument: $1"
-                echo "Usage: $0 [PR-URL | --pr <n> | --branch <name> | --setup-only]"
+                echo "Usage: $0 [PR-URL | --pr <n> | --branch <name> | --setup-only | --image <image>]"
                 echo "       No arguments → interactive mode"
                 exit 1 ;;
         esac
     done
+fi
+
+patch_csv_and_rollout() {
+    local image="$1"
+    CSV_NAME=$(oc get csv -n "$NAMESPACE" -o name | grep openstack-operator | head -1)
+    if [[ -z "$CSV_NAME" ]]; then
+        echo "ERROR: Could not find openstack-operator CSV in namespace $NAMESPACE"
+        exit 1
+    fi
+    CSV_BARE=$(basename "$CSV_NAME")
+    echo "==> Patching CSV: $CSV_BARE"
+    PATCH=$(oc get csv/"$CSV_BARE" -n "$NAMESPACE" -o json | ENV_VAR="$ENV_VAR" TARGET_IMAGE="$image" python3 -c "
+import json, sys, os
+data = json.load(sys.stdin)
+patches = []
+for di, dep in enumerate(data['spec']['install']['spec']['deployments']):
+    for ci, c in enumerate(dep['spec']['template']['spec']['containers']):
+        for ei, e in enumerate(c.get('env', [])):
+            if e['name'] == os.environ['ENV_VAR']:
+                patches.append({
+                    'op': 'replace',
+                    'path': f'/spec/install/spec/deployments/{di}/spec/template/spec/containers/{ci}/env/{ei}/value',
+                    'value': os.environ['TARGET_IMAGE']
+                })
+if not patches:
+    raise SystemExit('ERROR: ' + os.environ['ENV_VAR'] + ' not found in CSV')
+print(json.dumps(patches))
+")
+    oc patch csv/"$CSV_BARE" -n "$NAMESPACE" --type json -p "$PATCH"
+    echo "==> CSV patched."
+    echo "==> Restarting openstack-operator to pick up updated env var..."
+    oc rollout restart deployment/openstack-operator-controller-manager -n "$NAMESPACE"
+    oc rollout status deployment/openstack-operator-controller-manager -n "$NAMESPACE" --timeout=120s
+    echo "==> openstack-operator ready."
+}
+
+# ── Shortcut: --image skips build entirely ────────────────────────────────────
+if [[ -n "$DIRECT_IMAGE" ]]; then
+    echo "==> Using provided image (skipping build): $DIRECT_IMAGE"
+    patch_csv_and_rollout "$DIRECT_IMAGE"
+    oc rollout status deployment/ironic-operator-controller-manager -n "$NAMESPACE" --timeout=120s
+    echo ""
+    echo "Done."
+    exit 0
 fi
 
 # ── 1. Registry setup (idempotent — safe to run every time) ──────────────────
@@ -277,41 +327,8 @@ echo "==> CRDs applied."
 # The ironic-operator has no CSV of its own — it is managed by the
 # openstack-operator meta-operator via the env var above.
 # Patching the Deployment directly does not work; OLM reverts it immediately.
-# The CSV version (v0.5.0 etc.) is found dynamically so version bumps don't break this.
 
-CSV_NAME=$(oc get csv -n "$NAMESPACE" -o name | grep openstack-operator | head -1)
-if [[ -z "$CSV_NAME" ]]; then
-    echo "ERROR: Could not find openstack-operator CSV in namespace $NAMESPACE"
-    exit 1
-fi
-CSV_BARE=$(basename "$CSV_NAME")
-echo "==> Patching CSV: $CSV_BARE"
-
-PATCH=$(oc get csv/"$CSV_BARE" -n "$NAMESPACE" -o json | python3 -c "
-import json, sys
-data = json.load(sys.stdin)
-patches = []
-for di, dep in enumerate(data['spec']['install']['spec']['deployments']):
-    for ci, c in enumerate(dep['spec']['template']['spec']['containers']):
-        for ei, env in enumerate(c.get('env', [])):
-            if env['name'] == '$ENV_VAR':
-                patches.append({
-                    'op': 'replace',
-                    'path': f'/spec/install/spec/deployments/{di}/spec/template/spec/containers/{ci}/env/{ei}/value',
-                    'value': '$INTERNAL_IMG'
-                })
-if not patches:
-    raise SystemExit('ERROR: $ENV_VAR not found in CSV')
-print(json.dumps(patches))
-")
-
-oc patch csv/"$CSV_BARE" -n "$NAMESPACE" --type json -p "$PATCH"
-echo "==> CSV patched."
-
-echo "==> Restarting openstack-operator to pick up updated env var..."
-oc rollout restart deployment/openstack-operator-controller-manager -n "$NAMESPACE"
-oc rollout status deployment/openstack-operator-controller-manager -n "$NAMESPACE" --timeout=120s
-echo "==> openstack-operator ready."
+patch_csv_and_rollout "$INTERNAL_IMG"
 
 # ── 9. Wait for rollout and verify ───────────────────────────────────────────
 
