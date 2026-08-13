@@ -327,13 +327,16 @@ echo "==> Applying updated CRDs from checked-out branch..."
 oc apply -f config/crd/bases/
 echo "==> CRDs applied."
 
-# ── 8. Patch the openstack-operator CSV ──────────────────────────────────────
+# ── 8. Patch the openstack-operator CSV and force deployment image ────────────
 #
 # The ironic-operator has no CSV of its own — it is managed by the
-# openstack-operator meta-operator via the env var above.
-# Patching the Deployment directly does not work; OLM reverts it immediately.
+# openstack-operator meta-operator via the env var above. The CSV patch
+# ensures persistence, but OLM propagates env var changes asynchronously so
+# openstack-operator may reconcile with the old image before the new env var
+# lands. Force the deployment image directly to guarantee immediate effect.
 
 patch_csv_and_rollout "$INTERNAL_IMG"
+oc set image deployment/ironic-operator-controller-manager manager="$INTERNAL_IMG" -n "$NAMESPACE"
 
 # ── 9. Wait for rollout and verify ───────────────────────────────────────────
 
