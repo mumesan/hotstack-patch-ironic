@@ -327,6 +327,28 @@ echo "==> Applying updated CRDs from checked-out branch..."
 oc apply -f config/crd/bases/
 echo "==> CRDs applied."
 
+# ── 7b. Sync operator RBAC from the checked-out branch ───────────────────────
+#
+# The ironic-operator ClusterRole normally comes from the installed bundle/CSV.
+# A dev image built from a branch may declare permissions the installed
+# ClusterRole doesn't have yet -- e.g. 'use' on the nonroot-v2 SCC (added by
+# the post-kolla SecurityContext hardening). When the new operator then tries
+# to create the operand Role granting that permission, reconcile fails with
+# "attempting to grant RBAC permissions not currently held".
+#
+# Render the branch's operator ClusterRole under a dev-specific name and bind
+# it to the operator ServiceAccount. It is additive and separately named, so
+# OLM won't revert it, and a ClusterRoleBinding satisfies the escalation check
+# in any operand namespace. Keeps the deployed RBAC in sync with the image.
+echo "==> Syncing operator RBAC from checked-out branch..."
+DEV_ROLE="ironic-operator-dev-rbac"
+sed "s/name: manager-role/name: ${DEV_ROLE}/" config/rbac/role.yaml | oc apply -f -
+oc create clusterrolebinding "$DEV_ROLE" \
+    --clusterrole="$DEV_ROLE" \
+    --serviceaccount="${NAMESPACE}:ironic-operator-controller-manager" \
+    --dry-run=client -o yaml | oc apply -f -
+echo "==> Operator RBAC synced."
+
 # ── 8. Patch the openstack-operator CSV and force deployment image ────────────
 #
 # The ironic-operator has no CSV of its own — it is managed by the
